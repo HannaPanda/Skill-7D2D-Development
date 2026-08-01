@@ -75,3 +75,9 @@ The skill treats "works on 3.x" as a claim nobody can make. A mod is compatible 
 it was launched on, and the tested list is re-established per mod version, because any Harmony
 change can invalidate all of it. Companion skill `7d2d-testbench` runs that matrix; it is not
 part of this repository.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The game class names, enum values and IL findings recorded here are
+observations about 7 Days to Die, which belongs to The Fun Pimps. This repository ships no game
+code or assets.
