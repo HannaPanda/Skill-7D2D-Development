@@ -73,8 +73,15 @@ Invoke it by name with:
 
 The skill treats "works on 3.x" as a claim nobody can make. A mod is compatible with the builds
 it was launched on, and the tested list is re-established per mod version, because any Harmony
-change can invalidate all of it. Companion skill `7d2d-testbench` runs that matrix; it is not
-part of this repository.
+change can invalidate all of it. The companion skill
+[Skill-7D2D-Testbench](https://github.com/HannaPanda/Skill-7D2D-Testbench) runs that matrix.
+
+## Related
+
+- [Skill-7D2D-Testbench](https://github.com/HannaPanda/Skill-7D2D-Testbench) tests a mod against
+  several game versions and decides what may go in a `TESTED_VERSIONS` line.
+- [Skill-Nexus-Description](https://github.com/HannaPanda/Skill-Nexus-Description) turns a
+  finished mod into a mod page that does not read like a development log.
 
 ## Licence
 
