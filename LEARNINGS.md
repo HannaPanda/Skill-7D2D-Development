@@ -12,6 +12,33 @@ Format:
 
 ---
 
+## 2026-08-07 - ✅ BESTÄTIGT: ein zerstörtes Runtime-Material auf einem gepoolten Renderer zeichnet magenta - und `== null` erkennt es nicht  [3.0.0, GUI-Lauf]
+- Der Eintrag unten (Shader-Hypothese) war **auf der falschen Fährte**. Das Diagnose-Logging aus 1.2.5 hat es entschieden: Beleg ist `WRN [AdamantBlock] the trap material we applied has gone stale (material destroyed)`, ausgelöst direkt nach einem **Weltneuladen** - kein Speicherdruck nötig, kein Bundle-Release. **Der Klon selbst** wird zerstört, nicht sein Shader.
+- Warum es dauerhaft magenta bleibt: der Wächter `if (mat == null) continue;` in der Reskin-Schleife überspringt das zerstörte Material **genau so wie einen leeren Slot**. Der Renderer, der die Reparatur braucht, ist damit der einzige, der sie nie bekommt - und ein gepoolter Renderer bekommt nie wieder ein Vanilla-Material zugeteilt, also erreicht ihn auch später nichts mehr.
+- **Der Diskriminator ist `ReferenceEquals(mat, null)`:** referenz-null = wirklich leerer Slot, nicht identifizierbar, nichts zu machen. Fake-null = zerstört, aber ein lebendes Managed-Objekt, dessen `GetInstanceID()` weiter auf den alten Eintrag zeigt ⇒ nachschlagbar und ersetzbar. `== null` beantwortet beides mit `true` und ist hier deshalb der Bug, nicht die Prüfung.
+- Merksatz: **Bei jedem `if (unityObject == null) continue;` in einer Wiederverwendungsschleife fragen, ob "zerstört" und "nie da gewesen" wirklich dieselbe Behandlung verdienen.** Meistens nicht.
+- Zweiter, methodischer Fehlschluss zum Merken: ich hatte den Material-Pfad ausgeschlossen mit "ein zerstörtes Material würde beim Property-Zugriff werfen, im Log steht keine Exception". Falsch - der `== null`-Wächter biegt **vor** jedem Property-Zugriff ab. **Eine Ausschlussbegründung über eine fehlende Exception gilt nur, wenn der Code die Stelle überhaupt erreicht.**
+- Fix: `ReferenceEquals`-Weiche, Recover-Pfad über `ours[id]`, Fallback auf den einzigen lebenden Klon, `try/catch` um den Id-Zugriff. In `7D2D-Adamant` 1.2.5 (`src/dll/AdamantTrapModel.cs`).
+
+---
+
+## 2026-08-05 - ⚠ ÜBERHOLT (siehe Eintrag vom 2026-08-07): ein geklontes Material überlebt seinen Shader → Unity zeichnet magenta  [3.1.0 (b14), Nutzer-Report]
+- **Status: als Ursache widerlegt, als Absicherung behalten.** Die Symptom-Kette unten stimmt, die daraus gezogene Ursache nicht - es war das zerstörte Material, nicht der Shader. Die Shader-Prüfung bleibt trotzdem im Code: sie kostet nichts und deckt denselben Magenta-Fall aus einer zweiten Richtung ab. Als Lehrstück stehen lassen, nicht als Rezept.
+- Symptom: Adamant Spikes Trap beim Nutzer **flach hell-magenta, Spike-Form korrekt**, der Adamant-Block daneben einwandfrei. Dauerhaft, nicht flackernd. Maschine: Ryzen 6900HX **iGPU**, 15,6 GB RAM, ~50 Mods, Heap 3,7 GB.
+- Evidence aus dem Log (8.326 Zeilen, keine einzige `[AdamantBlock]`-WRN/ERR):
+  - `trap model retextured on 'ironSpikesTrap': _MainTex, _Normal, _RMOM` **7×** über 4,5 h - der Klon musste also siebenmal neu gebaut werden.
+  - **Keine** dieser Zeilen sagt `'ironSpikesTrap_adamant'`. Der Pfad, auf dem ein eigener Klon als Quelle durchgereicht wird, lief nie ⇒ die Texturprüfung lieferte immer `true` ⇒ **die Texturen lebten durchgehend**.
+  - **Keine Exception im ganzen Log.** Ein zerstörtes Material würde beim `HasProperty`-Zugriff `MissingReferenceException` werfen ⇒ **das Material lebte auch**.
+  - `.meta` gegengeprüft: `ignoreMipmapLimit: 1`, `streamingMipmaps: 0`, `isReadable: 0` ⇒ Textur voll resident, identisch zur Entwicklermaschine. Mipmap-Limit-Falle (siehe 1.2.2) ausgeschlossen.
+- Schlusskette: Form korrekt ⇒ Mesh und Renderer leben. Material lebt, Texturen leben. Magenta ⇒ `Hidden/InternalErrorShader`. Übrig bleibt **der Shader**. Ein `null` in `_MainTex` gäbe auf diesem Shader **Weiß, nicht Magenta** - das ist der Diskriminator.
+- Mechanismus: `new Material(src)` kopiert die **Referenz** auf einen Shader, der zum Addressables-Bundle von `src` gehört. Wird das Bundle freigegeben (auf einer speicherengen Kiste ständig), stirbt der Shader, während der statische Cache des Mods den Klon am Leben hält. Der Klon ist dann das Einzige, was auf einen toten Shader zeigt.
+- Warum es *dauerhaft* wird: die Invalidierung prüfte nur die Texturen (`GetTexture("_MainTex") != null`). Die kommen aus dem **eigenen** Bundle und sterben fast nie; der Shader kommt aus dem **des Spiels** und stirbt. Ein gepoolter Renderer, der den toten Klon trägt, wurde damit bei jeder Reaktivierung durchgewinkt - magenta bis zum Spielneustart.
+- Rule / fix: **Ein gecachtes Runtime-Material niemals über Aktivierungen hinweg als gültig annehmen - und beim Validieren den SHADER prüfen, nicht nur die Texturen.**
+  1. `mat.shader == null` **vor** `shader.name` prüfen - ein zerstörter Shader ist Unity-fake-null und `.name` wirft darauf. Zweiter Fall: Unity hat bereits auf `Hidden/InternalErrorShader` umgestellt, den fängt man über den Namen.
+  2. **Das Quell-Material mitcachen.** Ein reskinnter Renderer trägt das vanilla Material nicht mehr; `new Material(klon)` würde genau den toten Shader mitkopieren.
+  3. **Zurückgezogene Klon-Ids im Id-Map stehen lassen.** Sonst läuft ein Renderer, der noch einen alten Klon trägt, in den "unbekanntes Vanilla-Material"-Pfad und wird erneut geklont.
+- Merksatz zur Symptom-Trennung: **magenta + Form intakt = Shader weg. Weiß/grau = Textur weg. Vanilla-Look = Zuweisung lief nie.** Drei verschiedene Ursachen, im Log alle drei gleich unsichtbar - deshalb loggt 1.2.5 den Shader-Namen und den Verwerfungsgrund ausdrücklich mit.
+
 ## 2026-08-04 - Die Mod-Localization heisst auf V2.x `Localization.txt` und erst ab V3.x `Localization.csv` - fehlt sie, laedt das Spiel sie schweigend nicht  [2.6 vs 3.0.0/3.0.1/3.1.0]
 - Symptom: Adamant Block 1.2.3.0 (unveraendert) auf V 2.6 (b14) headless gestartet. Smoke-Test **gruen**: Mod geladen, Harmony gepatcht, 0 ERR, 0 EXC, 0 XML-Probleme. Einziger Unterschied zu den 3.x-Laeufen war eine **fehlende** Logzeile: `INF [MODS] Loading localization from mod: AdamantBlock` stand nur in den 3.x-Logs.
 - Evidence, `ilspycmd -t Localization` gegen beide Assemblies. `ModManager.LoadLocalizations` ist in beiden Versionen identisch und uebergibt nur den `<mod>/Config`-Ordner; der Dateiname steht eine Ebene tiefer:
